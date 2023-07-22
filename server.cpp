@@ -1,8 +1,122 @@
 #include "server.h"
 
+
 Server::Server(QObject *parent) : QObject(parent)
 {
+    chatsDB = QSqlDatabase::addDatabase("QMYSQL");
+    chatsDB.setUserName("Sheeesh");
+    chatsDB.setPassword("IAMAFAILURETOMYFAMILY./1311");
+    chatsDB.setPort(3306);
+    if (chatsDB.open())
+    {
+        qDebug() << "successfully opened chats!";
+    }
+    else
+    {
+        qDebug() << "ERROR! cannot opened chats " << chatsDB.lastError().text();
+    }
 
+    sqlQuery = QSqlQuery(chatsDB);
+
+    proceedQuery("CREATE DATABASE IF NOT EXISTS whispertalk_messaging_system_db;");
+    proceedQuery("use whispertalk_messaging_system_db;");
+
+    proceedQuery("CREATE TABLE IF NOT EXISTS user_accounts"
+                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                "login VARCHAR(50) NOT NULL,"
+                "password varchar(100) NOT NULL,"
+                "salt varchar(50) NOT NULL,"
+                "PRIMARY KEY (id))"
+                "ENGINE = InnoDB;");
+
+    proceedQuery("CREATE TABLE user_chat_lines"
+                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                "updated_at TIMESTAMP NOT NULL,"
+                "last_message VARCHAR(50),"
+                "user_id INT UNSIGNED NOT NULL,"
+                "PRIMARY KEY (id),"
+                "CONSTRAINT null_user FOREIGN KEY (user_id) REFERENCES user_accounts(id)"
+                "ON DELETE CASCADE ON UPDATE CASCADE)"
+                "ENGINE=InnoDB;");
+
+    proceedQuery("CREATE TABLE chat_line_messages"
+                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                "client_id INT UNSIGNED NOT NULL,"
+                "created_at TIMESTAMP NOT NULL,"
+                "message TEXT NOT NULL,"
+                "chatline_id INT UNSIGNED NOT NULL,"
+                "contact_id INT UNSIGNED NOT NULL,"
+                "FOREIGN KEY (client_id) REFERENCES user_accounts(id) "
+                "ON DELETE CASCADE ON UPDATE CASCADE,"
+                "FOREIGN KEY (chatline_id) REFERENCES user_accounts(id) "
+                "ON DELETE CASCADE ON UPDATE CASCADE,"
+                "FOREIGN KEY (contact_id) REFERENCES user_chat_lines(user_id) "
+                "ON DELETE CASCADE ON UPDATE CASCADE)"
+                "ENGINE InnoDB;");
+
+    sqlQuery.clear();
+}
+
+
+void Server::proceedQuery(QString query, bool clearAfter)
+{
+    if(sqlQuery.exec(query)){
+        qDebug() << "query " << query << " - successfully processed\n";
+    }
+    else{
+        qDebug() << "query " << query << " - hasn't processed " << sqlQuery.lastError().text() << "\n";
+    }
+
+
+    if (clearAfter) sqlQuery.clear();
+}
+
+QJsonObject Server::createJsonObject(JsonFileType jsonFile, bool operationReslt)
+{
+    QJsonObject mainJsonObject;
+
+    switch (jsonFile) {
+    case JsonFileType::SignInResults:
+
+        mainJsonObject["login_reslt"] = operationReslt;
+        break;
+    case JsonFileType::RegisterUserResults:
+
+        mainJsonObject["register_result"] = operationReslt;
+        break;
+    default:
+        break;
+    }
+
+    // Convert the JSON object to a JSON document
+    QJsonDocument jsonDocument(mainJsonObject);
+
+    // Convert the JSON document to a QByteArray
+    QByteArray jsonData = jsonDocument.toJson();
+
+    // Create and open a file for writing
+    QFile file("data.json");
+    if (file.open(QIODevice::WriteOnly))
+    {
+        // Write the JSON data to the file
+        file.write(jsonData);
+        file.close();
+        qDebug() << "JSON file created successfully.";
+    } else
+    {
+        qDebug() << "Failed to create JSON file.";
+    }
+
+    return mainJsonObject;
+}
+
+void Server::sendJsonToServer(const QJsonObject &jsonObject, QTcpSocket *clientSocket)
+{
+    QJsonDocument jsonDocument(jsonObject);
+    QByteArray jsonData = jsonDocument.toJson();
+
+    // Send the JSON data to the server
+    clientSocket->write(jsonData);
 }
 
 void Server::startServer()
@@ -80,12 +194,76 @@ void Server::socketReadyRead()
     // use QObject::sender() to get the pointer of the object that emitted the readyRead signal
     // and convert it to the QTcpSocket class so that we can access its readAll() function.
     QTcpSocket* client = qobject_cast<QTcpSocket*>(QObject::sender());
-    QString socketIpAddress = client->peerAddress().toString();
-    int port = client->peerPort();
-    QString data = QString(client->readAll());
-    qDebug() << "Message: " + data + " (" + socketIpAddress + ":" + QString::number(port) + ")";
-    // redirect the message, just passing the message to all connected clients.
-    sendMessageToClients(data);
+    QByteArray jsonData = client->readAll();
+
+    // Parse the JSON data
+    QJsonDocument jsonDocument = QJsonDocument::fromJson(jsonData);
+
+    // Check if parsing was successful
+    if (!jsonDocument.isNull() && jsonDocument.isObject())
+    {
+        // Process the JSON object here
+        // Example: QString name = jsonObject["name"].toString();
+        // Output it to console or do whatever you need
+        QJsonObject jsonObject = jsonDocument.object();
+
+        const QString key = jsonObject.begin().key();
+        const QJsonValue value = jsonObject.begin().value();
+
+        QJsonObject jsonDataObject = jsonObject.begin().value().toObject();
+        // Display the key and values
+        qDebug() << "Key:" << key;
+
+
+        if (key == "message")
+        {
+            int sender_id = jsonDataObject.value("sender_id").toInt();
+            QString messsage = jsonDataObject.value("messsage").toString();
+            QString created_at = jsonDataObject.value("created_at").toString();
+            int chatline_id = jsonDataObject.value("chatline_id").toInt();
+            int receiver_id = jsonDataObject.value("receiver_id").toInt();
+
+            qDebug() << "sender_id:" << sender_id;
+            qDebug() << "messsage:" << messsage;
+            qDebug() << "created_at:" << created_at;
+            qDebug() << "chatline_id:" << chatline_id;
+            qDebug() << "receiver_id:" << receiver_id;
+            qDebug() << "---------------------";
+
+
+        }
+        else if (key == "login")
+        {
+            QString login = jsonDataObject.value("login").toString();
+            QString password = jsonDataObject.value("password").toString();
+            qDebug() << "login:" << login;
+            qDebug() << "password:" << password;
+            QString query = "select * from user_accounts where login = \'" + login + "\' and password = \'" + password + "\';";
+            proceedQuery(query, false);
+            bool login_check_success;
+            if (sqlQuery.next())
+            {
+                qDebug() << "Successful authentication";
+                login_check_success = true;
+            }
+            else
+            {
+                qDebug() << "Invalid login or password";
+                login_check_success = false;
+            }
+            QJsonObject login_result = createJsonObject(JsonFileType::SignInResults, login_check_success);
+            sendJsonToServer(login_result, client);
+        }
+        else if (key == "register")
+        {
+            //Implement this
+            qDebug() << "unkown key - " << key;
+        }
+        else
+        {
+
+        }
+    }
 }
 
 // This function gets triggered whenever a client's network state has changed,

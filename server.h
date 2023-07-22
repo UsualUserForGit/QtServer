@@ -2,14 +2,37 @@
 #define SERVER_H
 
 #include <QObject>
-#include <QTcpServer>
-#include <QTcpSocket>
 #include <QDebug>
 #include <QVector>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QFile>
+
 
 class Server : public QObject
 {
     Q_OBJECT
+
+    QTcpServer*             chatServer;
+    QVector<QTcpSocket*>*   allClients;
+    QSqlDatabase chatsDB;
+    QSqlDatabase usersDB;
+    QSqlQuery sqlQuery;
+
+    void proceedQuery(QString query = "", bool clearAfter = true);
+
+    enum class JsonFileType {SignInData, RegisterUser, SignInResults, RegisterUserResults};
+
+    QJsonObject createJsonObject(JsonFileType jsonFile, bool operationReslt);
+    void sendJsonToServer(const QJsonObject& jsonObject, QTcpSocket *clientSocket);
+
+
 public:
     explicit Server(QObject *parent = nullptr);
 
@@ -24,9 +47,6 @@ public slots:
     void socketReadyRead();
     void socketStateChanged(QAbstractSocket::SocketState state);
 
-private:
-    QTcpServer*             chatServer;
-    QVector<QTcpSocket*>*   allClients;
 };
 
 #endif // SERVER_H
