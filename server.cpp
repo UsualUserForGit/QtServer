@@ -29,8 +29,9 @@ Server::Server(QObject *parent) : QObject(parent)
                 "PRIMARY KEY (id))"
                 "ENGINE = InnoDB;");
 
-    proceedQuery("CREATE TABLE user_chat_lines"
+    proceedQuery("CREATE TABLE IF NOT EXISTS user_chat_lines"
                 "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                "chatline_name VARCHAR(20) NOT NULL,"
                 "updated_at TIMESTAMP NOT NULL,"
                 "last_message VARCHAR(50),"
                 "user_id INT UNSIGNED NOT NULL,"
@@ -39,7 +40,7 @@ Server::Server(QObject *parent) : QObject(parent)
                 "ON DELETE CASCADE ON UPDATE CASCADE)"
                 "ENGINE=InnoDB;");
 
-    proceedQuery("CREATE TABLE chat_line_messages"
+    proceedQuery("CREATE TABLE IF NOT EXISTS chat_line_messages"
                 "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
                 "client_id INT UNSIGNED NOT NULL,"
                 "created_at TIMESTAMP NOT NULL,"
@@ -57,7 +58,7 @@ Server::Server(QObject *parent) : QObject(parent)
     sqlQuery.clear();
 }
 
-
+// Function to execute queries to MYSQL database
 void Server::proceedQuery(QString query, bool clearAfter)
 {
     if(sqlQuery.exec(query)){
@@ -71,6 +72,7 @@ void Server::proceedQuery(QString query, bool clearAfter)
     if (clearAfter) sqlQuery.clear();
 }
 
+// This function creates and return QJsonObject with the data depending on the JsonFileType enum
 QJsonObject Server::createJsonObject(JsonFileType jsonFile, bool operationReslt)
 {
     QJsonObject mainJsonObject;
@@ -110,7 +112,8 @@ QJsonObject Server::createJsonObject(JsonFileType jsonFile, bool operationReslt)
     return mainJsonObject;
 }
 
-void Server::sendJsonToServer(const QJsonObject &jsonObject, QTcpSocket *clientSocket)
+// This function sends Json file to the certain client tcp socket
+void Server::sendJsonToClient(const QJsonObject &jsonObject, QTcpSocket *clientSocket)
 {
     QJsonDocument jsonDocument(jsonObject);
     QByteArray jsonData = jsonDocument.toJson();
@@ -119,6 +122,67 @@ void Server::sendJsonToServer(const QJsonObject &jsonObject, QTcpSocket *clientS
     clientSocket->write(jsonData);
 }
 
+// This function proceeds JSON data depending on the key of the file
+void Server::processServerResponse(QJsonObject jsonObject, QTcpSocket *client)
+{
+    const QString key = jsonObject.begin().key();
+
+    QJsonObject jsonDataObject = jsonObject.begin().value().toObject();
+    // Display the key and values
+    qDebug() << "Key:" << key;
+
+    if (key == "message")
+    {
+        QString sender = jsonDataObject.value("sender").toString();
+        QString message = jsonDataObject.value("message_text").toString();
+        QString created_at = jsonDataObject.value("created_at").toString();
+        QString chatline = jsonDataObject.value("chatline_name").toString();
+
+        if (chatline == "General chat")
+        {
+            sendMessageToClients(jsonObject);
+        }
+
+        qDebug() << "sender_id:" << sender;
+        qDebug() << "messsage:" << message;
+        qDebug() << "created_at:" << created_at;
+        qDebug() << "chatline_id:" << chatline;
+        qDebug() << "---------------------";
+    }
+    else if (key == "login")
+    {
+        QString login = jsonDataObject.value("login").toString();
+        QString password = jsonDataObject.value("password").toString();
+        qDebug() << "login:" << login;
+        qDebug() << "password:" << password;
+        QString query = "select * from user_accounts where login = \'" + login + "\' and password = \'" + password + "\';";
+        proceedQuery(query, false);
+        bool login_check_success;
+        if (sqlQuery.next())
+        {
+            qDebug() << "Successful authentication";
+            login_check_success = true;
+        }
+        else
+        {
+            qDebug() << "Invalid login or password";
+            login_check_success = false;
+        }
+        QJsonObject login_result = createJsonObject(JsonFileType::SignInResults, login_check_success);
+        sendJsonToClient(login_result, client);
+    }
+    else if (key == "register")
+    {
+        //Implement this
+        qDebug() << "unkown key - " << key;
+    }
+    else
+    {
+
+    }
+}
+
+// This slot starts the server
 void Server::startServer()
 {
     // store all the connected clients
@@ -141,8 +205,11 @@ void Server::startServer()
 
 }
 
-void Server::sendMessageToClients(QString message)
+// This function sends JSON data to all of the clients that are connected to the server
+void Server::sendMessageToClients(QJsonObject jsonObject)
 {
+    QJsonDocument jsonDocument(jsonObject);
+    QByteArray jsonData = jsonDocument.toJson();
     if (allClients->size() > 0)
     {
         // we simply loop through the allClients array and pass the message data to all the connected clients.
@@ -150,13 +217,15 @@ void Server::sendMessageToClients(QString message)
         {
             if (allClients->at(i)->isOpen() && allClients->at(i)->isWritable())
             {
-                allClients->at(i)->write(message.toUtf8());
+                allClients->at(i)->write(jsonData);
             }
         }
     }
 
 }
 
+// This slot creates new client connection if the server gets a new connection from a client
+// further explanation you can see bellow
 void Server::newClientConnection()
 {
     // Every new client connected to the server is a QTcpSocket object,
@@ -168,12 +237,14 @@ void Server::newClientConnection()
     int port = client->peerPort();
     // connect the client's disconnected(),readyRead() and stateChanged() signals to its respective slot function.
     // 1、When a client is disconnected from the server, the disconnected() signal will be triggered
-    connect(client, &QTcpSocket::disconnected, this, &Server::socketDisconnected);
     // 2、whenever a client is sending in a message to the server, the readyRead() signal will be triggered.
-    connect(client, &QTcpSocket::readyRead, this, &Server::socketReadyRead);
     // 3、 connected another signal called stateChanged() to the socketStateChanged() slot function.
-    connect(client, &QTcpSocket::stateChanged, this, &Server::socketStateChanged);
     // store each new client into the allClients array for future use.
+
+    connect(client, &QTcpSocket::disconnected, this, &Server::socketDisconnected);
+    connect(client, &QTcpSocket::readyRead, this, &Server::socketReadyRead);
+    connect(client, &QTcpSocket::stateChanged, this, &Server::socketStateChanged);
+
     allClients->push_back(client);
     qDebug() << "Socket connected from " + ipAddress + ":" + QString::number(port);
 }
@@ -205,64 +276,9 @@ void Server::socketReadyRead()
         // Process the JSON object here
         // Example: QString name = jsonObject["name"].toString();
         // Output it to console or do whatever you need
-        QJsonObject jsonObject = jsonDocument.object();
-
-        const QString key = jsonObject.begin().key();
-        const QJsonValue value = jsonObject.begin().value();
-
-        QJsonObject jsonDataObject = jsonObject.begin().value().toObject();
-        // Display the key and values
-        qDebug() << "Key:" << key;
+        processServerResponse(jsonDocument.object(), client);
 
 
-        if (key == "message")
-        {
-            int sender_id = jsonDataObject.value("sender_id").toInt();
-            QString messsage = jsonDataObject.value("messsage").toString();
-            QString created_at = jsonDataObject.value("created_at").toString();
-            int chatline_id = jsonDataObject.value("chatline_id").toInt();
-            int receiver_id = jsonDataObject.value("receiver_id").toInt();
-
-            qDebug() << "sender_id:" << sender_id;
-            qDebug() << "messsage:" << messsage;
-            qDebug() << "created_at:" << created_at;
-            qDebug() << "chatline_id:" << chatline_id;
-            qDebug() << "receiver_id:" << receiver_id;
-            qDebug() << "---------------------";
-
-
-        }
-        else if (key == "login")
-        {
-            QString login = jsonDataObject.value("login").toString();
-            QString password = jsonDataObject.value("password").toString();
-            qDebug() << "login:" << login;
-            qDebug() << "password:" << password;
-            QString query = "select * from user_accounts where login = \'" + login + "\' and password = \'" + password + "\';";
-            proceedQuery(query, false);
-            bool login_check_success;
-            if (sqlQuery.next())
-            {
-                qDebug() << "Successful authentication";
-                login_check_success = true;
-            }
-            else
-            {
-                qDebug() << "Invalid login or password";
-                login_check_success = false;
-            }
-            QJsonObject login_result = createJsonObject(JsonFileType::SignInResults, login_check_success);
-            sendJsonToServer(login_result, client);
-        }
-        else if (key == "register")
-        {
-            //Implement this
-            qDebug() << "unkown key - " << key;
-        }
-        else
-        {
-
-        }
     }
 }
 

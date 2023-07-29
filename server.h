@@ -6,12 +6,15 @@
 #include <QVector>
 #include <QTcpServer>
 #include <QTcpSocket>
+
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+
 #include <QFile>
 
 
@@ -30,14 +33,15 @@ class Server : public QObject
     enum class JsonFileType {SignInData, RegisterUser, SignInResults, RegisterUserResults};
 
     QJsonObject createJsonObject(JsonFileType jsonFile, bool operationReslt);
-    void sendJsonToServer(const QJsonObject& jsonObject, QTcpSocket *clientSocket);
+    void sendJsonToClient(const QJsonObject& jsonObject, QTcpSocket *clientSocket);
+    void processServerResponse(QJsonObject jsonObject, QTcpSocket *client);
 
 
 public:
     explicit Server(QObject *parent = nullptr);
 
     void startServer();
-    void sendMessageToClients(QString message);
+    void sendMessageToClients(QJsonObject jsonObject);
 
 signals:
 
