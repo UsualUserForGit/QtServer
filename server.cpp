@@ -9,11 +9,11 @@ Server::Server(QObject *parent) : QObject(parent)
     chatsDB.setPort(3306);
     if (chatsDB.open())
     {
-        qDebug() << "successfully opened chats!";
+        qDebug() << "successfully opened db!";
     }
     else
     {
-        qDebug() << "ERROR! cannot opened chats " << chatsDB.lastError().text();
+        qDebug() << "ERROR! cannot opened db " << chatsDB.lastError().text();
     }
 
     sqlQuery = QSqlQuery(chatsDB);
@@ -22,38 +22,40 @@ Server::Server(QObject *parent) : QObject(parent)
     proceedQuery("use whispertalk_messaging_system_db;");
 
     proceedQuery("CREATE TABLE IF NOT EXISTS user_accounts"
-                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
-                "login VARCHAR(50) NOT NULL,"
-                "password varchar(100) NOT NULL,"
-                "salt varchar(50) NOT NULL,"
-                "PRIMARY KEY (id))"
-                "ENGINE = InnoDB;");
+                 "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                 "login VARCHAR(50) UNIQUE NOT NULL,"
+                 "password varchar(100) NOT NULL,"
+                 "salt varchar(50) NOT NULL,"
+                 "PRIMARY KEY (id))"
+                 "ENGINE = InnoDB "
+                 "CHARACTER SET utf8 COLLATE utf8_unicode_ci;");
+
 
     proceedQuery("CREATE TABLE IF NOT EXISTS user_chat_lines"
-                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
-                "chatline_name VARCHAR(20) NOT NULL,"
-                "updated_at TIMESTAMP NOT NULL,"
-                "last_message VARCHAR(50),"
-                "user_id INT UNSIGNED NOT NULL,"
-                "PRIMARY KEY (id),"
-                "CONSTRAINT null_user FOREIGN KEY (user_id) REFERENCES user_accounts(id)"
-                "ON DELETE CASCADE ON UPDATE CASCADE)"
-                "ENGINE=InnoDB;");
+                 "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                 "creator_login VARCHAR(50) UNIQUE NOT NULL,"
+                 "chat_line_name VARCHAR(50) UNIQUE NOT NULL,"
+                 "updated_at TIMESTAMP NOT NULL,"
+                 "last_message VARCHAR(50) NOT NULL,"
+                 "PRIMARY KEY (id),"
+                 "FOREIGN KEY (creator_login) REFERENCES user_accounts(login)"
+                 "ON DELETE CASCADE ON UPDATE CASCADE)"
+                 "ENGINE=InnoDB "
+                 "CHARACTER SET utf8 COLLATE utf8_unicode_ci;");
 
     proceedQuery("CREATE TABLE IF NOT EXISTS chat_line_messages"
-                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
-                "client_id INT UNSIGNED NOT NULL,"
-                "created_at TIMESTAMP NOT NULL,"
-                "message TEXT NOT NULL,"
-                "chatline_id INT UNSIGNED NOT NULL,"
-                "contact_id INT UNSIGNED NOT NULL,"
-                "FOREIGN KEY (client_id) REFERENCES user_accounts(id) "
-                "ON DELETE CASCADE ON UPDATE CASCADE,"
-                "FOREIGN KEY (chatline_id) REFERENCES user_accounts(id) "
-                "ON DELETE CASCADE ON UPDATE CASCADE,"
-                "FOREIGN KEY (contact_id) REFERENCES user_chat_lines(user_id) "
-                "ON DELETE CASCADE ON UPDATE CASCADE)"
-                "ENGINE InnoDB;");
+                 "(id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                 "sender_login VARCHAR(50) UNIQUE NOT NULL,"
+                 "created_at TIMESTAMP NOT NULL,"
+                 "message TEXT NOT NULL,"
+                 "chat_line_name VARCHAR(50) UNIQUE NOT NULL,"
+                 "PRIMARY KEY (id),"
+                 "CONSTRAINT messages_sync FOREIGN KEY (chat_line_name) REFERENCES user_chat_lines(chat_line_name)"
+                 "ON DELETE CASCADE ON UPDATE CASCADE,"
+                 "FOREIGN KEY (sender_login) REFERENCES user_accounts(login)"
+                 "ON DELETE CASCADE ON UPDATE CASCADE)"
+                 "ENGINE=InnoDB "
+                 "CHARACTER SET utf8 COLLATE utf8_unicode_ci;");
 
     sqlQuery.clear();
 }
@@ -65,7 +67,7 @@ void Server::proceedQuery(QString query, bool clearAfter)
         qDebug() << "query " << query << " - successfully processed\n";
     }
     else{
-        qDebug() << "query " << query << " - hasn't processed " << sqlQuery.lastError().text() << "\n";
+        qDebug() << "query " << query << " - hasn't processed - " << sqlQuery.lastError().text() << "\n";
     }
 
 
@@ -76,6 +78,7 @@ void Server::proceedQuery(QString query, bool clearAfter)
 QJsonObject Server::createJsonObject(JsonFileType jsonFile, bool operationReslt)
 {
     QJsonObject mainJsonObject;
+    QJsonObject innerJsonObject;
 
     switch (jsonFile) {
     case JsonFileType::SignInResults:
@@ -86,27 +89,14 @@ QJsonObject Server::createJsonObject(JsonFileType jsonFile, bool operationReslt)
 
         mainJsonObject["register_result"] = operationReslt;
         break;
+    case JsonFileType::Message:
+        mainJsonObject["sender"] = messageObject.sender_login;
+        mainJsonObject["message_text"] = messageObject.message_text;
+        mainJsonObject["created_at"] = messageObject.created_at;
+        mainJsonObject["chatline_name"] = messageObject.chatline_name;
+        break;
     default:
         break;
-    }
-
-    // Convert the JSON object to a JSON document
-    QJsonDocument jsonDocument(mainJsonObject);
-
-    // Convert the JSON document to a QByteArray
-    QByteArray jsonData = jsonDocument.toJson();
-
-    // Create and open a file for writing
-    QFile file("data.json");
-    if (file.open(QIODevice::WriteOnly))
-    {
-        // Write the JSON data to the file
-        file.write(jsonData);
-        file.close();
-        qDebug() << "JSON file created successfully.";
-    } else
-    {
-        qDebug() << "Failed to create JSON file.";
     }
 
     return mainJsonObject;
@@ -117,7 +107,6 @@ void Server::sendJsonToClient(const QJsonObject &jsonObject, QTcpSocket *clientS
 {
     QJsonDocument jsonDocument(jsonObject);
     QByteArray jsonData = jsonDocument.toJson();
-
     // Send the JSON data to the server
     clientSocket->write(jsonData);
 }
@@ -126,10 +115,7 @@ void Server::sendJsonToClient(const QJsonObject &jsonObject, QTcpSocket *clientS
 void Server::processServerResponse(QJsonObject jsonObject, QTcpSocket *client)
 {
     const QString key = jsonObject.begin().key();
-
     QJsonObject jsonDataObject = jsonObject.begin().value().toObject();
-    // Display the key and values
-    qDebug() << "Key:" << key;
 
     if (key == "message")
     {
@@ -138,23 +124,20 @@ void Server::processServerResponse(QJsonObject jsonObject, QTcpSocket *client)
         QString created_at = jsonDataObject.value("created_at").toString();
         QString chatline = jsonDataObject.value("chatline_name").toString();
 
-        if (chatline == "General chat")
+        if (chatline == "General Chat")
         {
             sendMessageToClients(jsonObject);
         }
 
-        qDebug() << "sender_id:" << sender;
-        qDebug() << "messsage:" << message;
-        qDebug() << "created_at:" << created_at;
-        qDebug() << "chatline_id:" << chatline;
-        qDebug() << "---------------------";
+        QString query = "insert into chat_line_messages(sender_login, created_at, message, chat_line_name)"
+                        "values(\'" +  sender + "\', \'"+ created_at + "\', \'" + message + "\', \'" + chatline + "\')";
+        proceedQuery(query, true);
+
     }
     else if (key == "login")
     {
         QString login = jsonDataObject.value("login").toString();
         QString password = jsonDataObject.value("password").toString();
-        qDebug() << "login:" << login;
-        qDebug() << "password:" << password;
         QString query = "select * from user_accounts where login = \'" + login + "\' and password = \'" + password + "\';";
         proceedQuery(query, false);
         bool login_check_success;
@@ -171,14 +154,52 @@ void Server::processServerResponse(QJsonObject jsonObject, QTcpSocket *client)
         QJsonObject login_result = createJsonObject(JsonFileType::SignInResults, login_check_success);
         sendJsonToClient(login_result, client);
     }
+    else if (key == "load_chatline_messages")
+    {
+        QString chatline = jsonDataObject.value("chatline_name").toString();
+
+        QString query = "select * from chat_line_messages where chat_line_name = \'" + chatline + "\';";
+        proceedQuery(query, false);
+        if(sqlQuery.first())
+        {
+            QJsonArray jsonArray;
+            do
+            {
+                // Access the data from each column in the current row
+                int id = sqlQuery.value(0).toInt(); // Replace 0 with the index of the column you want to access
+                QString sender_login = sqlQuery.value(1).toString();
+                QString created_at = sqlQuery.value(2).toString();
+                QString message = sqlQuery.value(3).toString();
+                QString chatline_name = sqlQuery.value(4).toString();// Replace 1 with the index of another column, and so on...
+
+                // Do something with the data, for example, print it
+                messageObject.id = id;
+                messageObject.sender_login = sender_login;
+                messageObject.created_at = created_at;
+                messageObject.message_text = message;
+                messageObject.chatline_name = chatline_name;
+
+                jsonArray.append(createJsonObject(JsonFileType::Message));
+            }
+            while(sqlQuery.next());
+
+            QJsonObject jsonObject;
+            jsonObject["messages_to_load"] = jsonArray;
+            sendJsonToClient(jsonObject, client);
+
+        }
+        else
+        {
+            qDebug() << "No records in " + chatline;
+        }
+    }
     else if (key == "register")
     {
         //Implement this
-        qDebug() << "unkown key - " << key;
     }
     else
     {
-
+        qDebug() << "unkown key - " << key;
     }
 }
 

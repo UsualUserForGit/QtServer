@@ -4,6 +4,9 @@
 #include <QObject>
 #include <QDebug>
 #include <QVector>
+#include <QHash>
+#include <QFile>
+
 #include <QTcpServer>
 #include <QTcpSocket>
 
@@ -15,24 +18,41 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
-#include <QFile>
-
 
 class Server : public QObject
 {
     Q_OBJECT
+
+    struct Message
+    {
+        int id;
+        QString sender_login;
+        QString created_at;
+        QString message_text;
+        QString chatline_name;
+
+        bool isMessageEmpty()
+        {
+            return (id < 0 &&
+                    sender_login.isEmpty() &&
+                    created_at.isNull() &&
+                    message_text.isEmpty() &&
+                    chatline_name.isEmpty());
+        }
+    };
 
     QTcpServer*             chatServer;
     QVector<QTcpSocket*>*   allClients;
     QSqlDatabase chatsDB;
     QSqlDatabase usersDB;
     QSqlQuery sqlQuery;
+    Message messageObject;
 
     void proceedQuery(QString query = "", bool clearAfter = true);
 
-    enum class JsonFileType {SignInData, RegisterUser, SignInResults, RegisterUserResults};
+    enum class JsonFileType {SignInData, RegisterUser, SignInResults, RegisterUserResults, Message};
 
-    QJsonObject createJsonObject(JsonFileType jsonFile, bool operationReslt);
+    QJsonObject createJsonObject(JsonFileType jsonFile, bool operationReslt = false);
     void sendJsonToClient(const QJsonObject& jsonObject, QTcpSocket *clientSocket);
     void processServerResponse(QJsonObject jsonObject, QTcpSocket *client);
 
