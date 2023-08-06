@@ -4,9 +4,9 @@
 Server::Server(QObject *parent) : QObject(parent)
 {
     chatsDB = QSqlDatabase::addDatabase("QMYSQL");
-    chatsDB.setUserName("Sheeesh");
-    chatsDB.setPassword("IAMAFAILURETOMYFAMILY./1311");
-    chatsDB.setPort(3306);
+    chatsDB.setUserName("");// Insert your Mysql server user name
+    chatsDB.setPassword("");// Insert your mysql server user password
+    chatsDB.setPort(3306);// Insert your port
     if (chatsDB.open())
     {
         qDebug() << "successfully opened db!";
@@ -195,7 +195,25 @@ void Server::processServerResponse(QJsonObject jsonObject, QTcpSocket *client)
     }
     else if (key == "register")
     {
-        //Implement this
+        QString login = jsonDataObject.value("login").toString();
+        QString password = jsonDataObject.value("password").toString();
+        QString query = "insert into user_accounts(login, password, salt) values (\'" + login + "\', \'"
+                        + password + "\', (select substring(MD5(RAND()),1,20)));";
+
+        proceedQuery(query, false);
+        bool register_result;
+        if (sqlQuery.lastError().text().isEmpty())
+        {
+            qDebug() << "Successful registration";
+            register_result = true;
+        }
+        else if (sqlQuery.lastError().text().contains("Duplicate"))
+        {
+            qDebug() << "Duplicate value";
+            register_result = false;
+        }
+        QJsonObject register_resultuls_Json_object = createJsonObject(JsonFileType::RegisterUserResults, register_result);
+        sendJsonToClient(register_resultuls_Json_object, client);
     }
     else
     {
